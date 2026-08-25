@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { discoverBaseUrls, CumulusClient } from './carelink/cumulus.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './carelink/token.js';
+import { loadLoginForProbe } from './carelink/local-token.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -37,12 +37,7 @@ function summarize(data: unknown): string {
 }
 
 async function main(): Promise<void> {
-  let loginData = loadLoginData(path.join(ROOT, 'logindata.json'));
-  if (!loginData) throw new Error('Falta logindata.json — ejecuta npm run login');
-  if (isTokenExpired(loginData.access_token)) {
-    loginData = await refreshToken(loginData);
-    saveLoginData(path.join(ROOT, 'logindata.json'), loginData);
-  }
+  const loginData = loadLoginForProbe(path.join(ROOT, 'logindata.json'));
 
   // Reutilizamos el cliente para resolver rol y patientId una sola vez.
   const urls = await discoverBaseUrls(false);

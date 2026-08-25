@@ -40,15 +40,26 @@ const PATIENT = process.env['CARELINK_PATIENT'] || undefined;
 const DATA_DIR = process.env['DATA_DIR'] || ROOT;
 const LOGIN_PATH = path.join(DATA_DIR, 'logindata.json');
 
+/** La semilla inmutable que el usuario controla desde las variables de entorno. */
+function loadSeed(): LoginData | null {
+  const seed = process.env['LOGINDATA_JSON'];
+  if (!seed) return null;
+  try {
+    return JSON.parse(seed) as LoginData;
+  } catch (e) {
+    console.error('[token] LOGINDATA_JSON no es JSON válido:', (e as Error).message);
+    return null;
+  }
+}
+
 function loadLogin(): LoginData {
   if (fs.existsSync(LOGIN_PATH)) {
     return JSON.parse(fs.readFileSync(LOGIN_PATH, 'utf8')) as LoginData;
   }
-  const seed = process.env['LOGINDATA_JSON'];
+  const seed = loadSeed();
   if (seed) {
-    const parsed = JSON.parse(seed) as LoginData;
-    persistLogin(parsed);
-    return parsed;
+    persistLogin(seed);
+    return seed;
   }
   throw new Error(
     'No hay credenciales: falta logindata.json y la variable LOGINDATA_JSON.',
@@ -157,8 +168,31 @@ async function poll(): Promise<void> {
   try {
     let login = loadLogin();
     if (isTokenExpired(login.access_token)) {
-      login = await refreshToken(login);
-      persistLogin(login);
+      try {
+        login = await refreshToken(login);
+        persistLogin(login);
+      } catch (err) {
+        // El refresh token guardado puede estar REVOCADO, no sólo caducado.
+        // Auth0 rota los refresh tokens y, si detecta que uno ya usado se
+        // reutiliza (típico si corres una copia local contra la misma cuenta),
+        // invalida toda la familia. A partir de ahí el token del volumen es
+        // basura y sólo se recupera con un login nuevo.
+        //
+        // Si el usuario ya ha actualizado LOGINDATA_JSON, lo usamos y nos
+        // recuperamos solos, sin tener que borrar el volumen a mano.
+        const seed = loadSeed();
+        if (!seed || seed.refresh_token === login.refresh_token) {
+          console.error(
+            '[token] Refresh rechazado y la semilla LOGINDATA_JSON es la misma. ' +
+            'Hace falta un "npm run login" nuevo y actualizar la variable.',
+          );
+          throw err;
+        }
+        console.warn('[token] Refresh rechazado; reintentando con la semilla LOGINDATA_JSON…');
+        login = isTokenExpired(seed.access_token) ? await refreshToken(seed) : seed;
+        persistLogin(login);
+        console.log('[token] Recuperado con la semilla nueva.');
+      }
     }
     if (!baseUrls) baseUrls = await discoverBaseUrls(IS_US);
 

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { discoverBaseUrls, CumulusClient } from './carelink/cumulus.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './carelink/token.js';
+import { loadLoginForProbe } from './carelink/local-token.js';
 import type { CareLinkData } from './types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,16 +37,7 @@ async function main(): Promise<void> {
   line();
 
   // --- Token ---------------------------------------------------------------
-  let loginData = loadLoginData(LOGINDATA);
-  if (!loginData) {
-    console.error('✗ No hay logindata.json. Ejecuta primero:  npm run login');
-    process.exit(1);
-  }
-  if (isTokenExpired(loginData.access_token)) {
-    console.log('· Token caducado, refrescando…');
-    loginData = await refreshToken(loginData);
-    saveLoginData(LOGINDATA, loginData);
-  }
+  const loginData = loadLoginForProbe(LOGINDATA);
   console.log('✓ Token válido');
 
   // --- Discovery -----------------------------------------------------------

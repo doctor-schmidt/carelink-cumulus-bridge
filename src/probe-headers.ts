@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { discoverBaseUrls, CumulusClient } from './carelink/cumulus.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './carelink/token.js';
+import { loadLoginForProbe } from './carelink/local-token.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -59,12 +59,7 @@ function describe(status: number, data: unknown): string {
 
 async function main(): Promise<void> {
   const LOGIN = path.join(ROOT, 'logindata.json');
-  let loginData = loadLoginData(LOGIN);
-  if (!loginData) throw new Error('Falta logindata.json');
-  if (isTokenExpired(loginData.access_token)) {
-    loginData = await refreshToken(loginData);
-    saveLoginData(LOGIN, loginData);
-  }
+  const loginData = loadLoginForProbe(LOGIN);
 
   const urls = await discoverBaseUrls(false);
   const client = new CumulusClient(loginData, urls);
