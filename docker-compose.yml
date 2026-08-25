@@ -1,0 +1,43 @@
+services:
+  glucosa-bridge:
+    build: .
+    # o, si prefieres construir en otra máquina:
+    # image: glucosa-bridge:latest
+    container_name: glucosa-bridge
+    restart: unless-stopped
+
+    environment:
+      # Región de CareLink: EU o US
+      MMCONNECT_SERVER: EU
+      # Segundos entre consultas a Medtronic
+      POLL_INTERVAL: "120"
+      # Secreto de lectura. OBLIGATORIO: sin él el endpoint queda abierto.
+      # Ponlo en el fichero .env de al lado, NO aquí.
+      API_SECRET: ${API_SECRET:?Define API_SECRET en .env}
+      # Contenido completo de logindata.json en una línea. También en .env.
+      LOGINDATA_JSON: ${LOGINDATA_JSON:?Define LOGINDATA_JSON en .env}
+      DATA_DIR: /data
+
+    volumes:
+      # Persiste el refresh token entre reinicios y actualizaciones.
+      - glucosa-data:/data
+
+    # Sólo escucha en localhost: quien expone al exterior es el proxy inverso.
+    # Si usas Tailscale, cámbialo por la IP de tailscale0.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    # Endurecimiento básico
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  glucosa-data:

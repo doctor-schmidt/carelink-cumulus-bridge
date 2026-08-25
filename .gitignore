@@ -1,0 +1,14 @@
+node_modules/
+dist/
+logindata.json
+*.env
+https.txt
+.idea/
+.claude/
+
+# Respuestas de la API: contienen DATOS PERSONALES Y DE SALUD
+# (nombre, nº de serie del sensor, MAC, histórico de glucosa). Nunca subir.
+.env
+cumulus-response*.json
+cumulus-hit.json
+server.log
