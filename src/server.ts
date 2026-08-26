@@ -33,6 +33,13 @@ const API_SECRET = process.env['API_SECRET'] || '';
 const PATIENT = process.env['CARELINK_PATIENT'] || undefined;
 
 /**
+ * A partir de aquí los datos se consideran rancios y /health devuelve 503.
+ * Por defecto 15 min: el sensor da una lectura por minuto y la nube tarda ~4,5,
+ * así que pasado ese margen algo va mal de verdad.
+ */
+const STALE_AFTER_S = Number(process.env['STALE_AFTER'] || 900);
+
+/**
  * Railway borra el disco en cada despliegue. Para no perder el refresh_token:
  *  - DATA_DIR (volumen) es la fuente de verdad si existe,
  *  - LOGINDATA_JSON (variable de entorno) sirve de semilla inicial.
@@ -49,6 +56,36 @@ function loadSeed(): LoginData | null {
   } catch (e) {
     console.error('[token] LOGINDATA_JSON no es JSON válido:', (e as Error).message);
     return null;
+  }
+}
+
+/**
+ * Marcador de semillas ya consumidas.
+ *
+ * Guardamos un hash del refresh_token, no el token: si alguien mira el volumen
+ * no encuentra credenciales reutilizables.
+ */
+const SEED_MARK_PATH = path.join(DATA_DIR, 'seed-used.txt');
+
+function seedFingerprint(seed: LoginData): string {
+  return crypto.createHash('sha256').update(seed.refresh_token).digest('hex').slice(0, 32);
+}
+
+function seedAlreadyUsed(seed: LoginData): boolean {
+  try {
+    if (!fs.existsSync(SEED_MARK_PATH)) return false;
+    return fs.readFileSync(SEED_MARK_PATH, 'utf8').trim() === seedFingerprint(seed);
+  } catch {
+    return false; // ante la duda, permitir el intento: es una sola vez
+  }
+}
+
+function markSeedUsed(seed: LoginData): void {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(SEED_MARK_PATH, seedFingerprint(seed));
+  } catch (e) {
+    console.error('[token] No se pudo marcar la semilla como usada:', (e as Error).message);
   }
 }
 
@@ -164,7 +201,11 @@ function buildEntries(data: CareLinkData): NsEntry[] {
 // ---------------------------------------------------------------------------
 // Consulta a CareLink
 // ---------------------------------------------------------------------------
+/** Reintento con espera creciente: no tiene sentido insistir cada minuto si está revocado. */
+let nextAllowedPoll = 0;
+
 async function poll(): Promise<void> {
+  if (Date.now() < nextAllowedPoll) return;
   try {
     let login = loadLogin();
     if (isTokenExpired(login.access_token)) {
@@ -188,7 +229,22 @@ async function poll(): Promise<void> {
           );
           throw err;
         }
-        console.warn('[token] Refresh rechazado; reintentando con la semilla LOGINDATA_JSON…');
+        // Una semilla sólo se puede usar UNA vez: los refresh tokens de Auth0 se
+        // gastan al usarse. Reintentar una semilla ya consumida es reutilización,
+        // y eso mantiene revocada la familia entera — justo lo que convierte un
+        // fallo puntual en una caída permanente. Pasó: 524 fallos seguidos.
+        if (seedAlreadyUsed(seed)) {
+          console.error(
+            '[token] La semilla LOGINDATA_JSON ya se consumió y el refresh sigue fallando.\n' +
+            '        Hace falta un login nuevo:\n' +
+            '          1) rm logindata.json && npm run login\n' +
+            '          2) actualizar la variable LOGINDATA_JSON con el fichero nuevo\n' +
+            '        No se reintentará con esta semilla para no reutilizar el token.',
+          );
+          throw err;
+        }
+        console.warn('[token] Refresh rechazado; adoptando la semilla LOGINDATA_JSON (un solo intento)…');
+        markSeedUsed(seed);
         login = isTokenExpired(seed.access_token) ? await refreshToken(seed) : seed;
         persistLogin(login);
         console.log('[token] Recuperado con la semilla nueva.');
@@ -203,13 +259,26 @@ async function poll(): Promise<void> {
     cache.fetchedAt = Date.now();
     cache.lastError = null;
     cache.consecutiveErrors = 0;
+    nextAllowedPoll = 0;
 
     const n = Array.isArray(result.data.sgs) ? result.data.sgs.length : 0;
     console.log(`[poll] OK · ${n} lecturas · última=${result.data.lastSG?.sg ?? '?'}`);
   } catch (e) {
     cache.consecutiveErrors++;
     cache.lastError = (e as Error).message;
-    console.error(`[poll] fallo #${cache.consecutiveErrors}:`, cache.lastError);
+
+    // Espera creciente hasta 15 min. Insistir cada minuto contra un token
+    // revocado no lo resucita, sólo llena los logs y castiga a la API.
+    if (cache.consecutiveErrors >= 3) {
+      const waitMs = Math.min(POLL_MS * 2 ** (cache.consecutiveErrors - 2), 15 * 60_000);
+      nextAllowedPoll = Date.now() + waitMs;
+      console.error(
+        `[poll] fallo #${cache.consecutiveErrors}: ${cache.lastError} ` +
+        `· siguiente intento en ${Math.round(waitMs / 1000)}s`,
+      );
+    } else {
+      console.error(`[poll] fallo #${cache.consecutiveErrors}:`, cache.lastError);
+    }
   }
 }
 
@@ -250,8 +319,14 @@ const server = http.createServer((req, res) => {
 
   if (p === '/health' || p === '/') {
     const ageS = cache.fetchedAt ? Math.round((Date.now() - cache.fetchedAt) / 1000) : null;
-    return json(res, cache.data ? 200 : 503, {
-      ok: !!cache.data,
+    // "Tener datos" no es estar sano: hay que tenerlos FRESCOS.
+    // Antes devolvía 200 con datos de 8 horas y ningún monitor se enteraba.
+    const fresh = ageS !== null && ageS <= STALE_AFTER_S;
+    const healthy = !!cache.data && fresh;
+    return json(res, healthy ? 200 : 503, {
+      ok: healthy,
+      stale: !fresh,
+      staleAfterSeconds: STALE_AFTER_S,
       lastFetchSecondsAgo: ageS,
       readings: Array.isArray(cache.data?.sgs) ? cache.data!.sgs.length : 0,
       lastSG: cache.data?.lastSG?.sg ?? null,
