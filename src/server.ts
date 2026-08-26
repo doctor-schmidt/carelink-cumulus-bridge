@@ -138,15 +138,58 @@ function toEpochMs(sg: CareLinkSG, offsetMs: number): number {
   return Number.isNaN(asUtc) ? 0 : asUtc - offsetMs;
 }
 
-/** Desfase horario del paciente en ms, deducido de la propia respuesta. */
+/** Offset real de una zona IANA en un instante dado (respeta horario de verano). */
+function offsetForZone(zone: string, atMs: number): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(new Date(atMs));
+    const get = (t: string): number => Number(parts.find(p => p.type === t)?.value);
+    const asUtc = Date.UTC(
+      get('year'), get('month') - 1, get('day'),
+      get('hour') % 24, get('minute'), get('second'),
+    );
+    return Number.isNaN(asUtc) ? null : asUtc - atMs;
+  } catch {
+    return null; // zona desconocida para el runtime
+  }
+}
+
+/**
+ * Desfase horario del paciente en ms.
+ *
+ * Fuente preferida: `clientTimeZoneName` (p. ej. "Europe/Madrid"), que es un dato
+ * estable y respeta el horario de verano.
+ *
+ * ⚠️ ANTES se deducía comparando `lastConduitDateTime` con `currentServerTime`, y eso
+ * era un bug: `lastConduitDateTime` es la última vez que el móvil habló con la nube.
+ * Si el móvil lleva horas sin subir (caída, sin cobertura, app bloqueada), ese campo
+ * se congela y el offset sale desviado por esas mismas horas. Consecuencia real:
+ * lecturas emitidas con timestamp FUTURO y xDrip+ rechazándolas con
+ * "bgreading is too far in the future", además de envenenar su base de datos.
+ */
 function patientOffsetMs(data: CareLinkData): number {
+  const zone = data['clientTimeZoneName'] as string | undefined;
+  if (zone) {
+    const off = offsetForZone(zone, Date.now());
+    if (off !== null) return off;
+  }
+
+  // Respaldo: la heurística antigua, pero sólo si el conduit está reciente.
   const serverNow = Number(data['currentServerTime']);
   const localStr = data['lastConduitDateTime'] as string | undefined;
   if (!serverNow || !localStr) return 0;
   const localAsUtc = Date.parse(localStr + 'Z');
   if (Number.isNaN(localAsUtc)) return 0;
-  // Redondeado a media hora: las zonas horarias reales son múltiplos de 30 min.
+
   const rawOffset = localAsUtc - serverNow;
+  // Ninguna zona real pasa de ±14 h: fuera de eso el dato está rancio, no desfasado.
+  if (Math.abs(rawOffset) > 14 * 3_600_000) {
+    console.warn('[tz] lastConduitDateTime parece rancio; usando offset 0');
+    return 0;
+  }
   return Math.round(rawOffset / 1_800_000) * 1_800_000;
 }
 
@@ -191,7 +234,10 @@ function buildEntries(data: CareLinkData): NsEntry[] {
         device,
       };
     })
-    .filter(e => e.date > 0)
+    // Red de seguridad: una lectura con fecha futura envenena la base de datos de
+    // xDrip+ ("bgreading is too far in the future") y deja de aceptar las posteriores.
+    // Mejor descartarla que servir algo imposible. 2 min de margen por desfases de reloj.
+    .filter(e => e.date > 0 && e.date <= Date.now() + 120_000)
     .sort((a, b) => b.date - a.date); // Nightscout devuelve de más nueva a más vieja
 
   if (entries.length > 0) entries[0].direction = direction;
