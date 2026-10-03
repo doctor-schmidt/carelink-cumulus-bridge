@@ -1,9 +1,6 @@
 import json
 from datetime import datetime
 
-with open("cumulus-response.json", "r") as f:
-    data = json.load(f)
-
 now = datetime.now()
 today = now.date()
 
@@ -20,7 +17,10 @@ def getIOB(bolus, minAgo):
             x2 = (minAgo - 75) / 5
             iob = bolus * (0.001323 * x2 * x2 - 0.054233 * x2 + 0.55556)
     return iob
-    
+
+with open("cumulus-response.json", "r") as f:
+    data = json.load(f)
+
 injections = []
 
 for marker in data.get("markers", []):
@@ -52,7 +52,7 @@ for injection in injections:
     iob = getIOB(injection["units"], min_ago)
     total_iob += iob
     
-print(f"\nToday: {total:g}u   {len(injections)}   IOB {total_iob:.2f}u\n")
+print(f"\n   {total:g}u   {len(injections)}   IOB {total_iob:.2f}u\n")
 
 for injection in injections:
     elapsed = datetime.now() - injection["time"]
