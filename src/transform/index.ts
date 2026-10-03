@@ -95,11 +95,16 @@ function sgvEntries(
     .filter(entry => entry.kind === 'SG' && entry.sg !== 0)
     .map(sgv => {
       // Cumulus v13 usa `timestamp`; la API antigua usaba `datetime`.
+      /*
       const timestamp = parsePumpTime(
         sgv.timestamp ?? sgv.datetime ?? '',
         offset,
         offsetMilliseconds,
       );
+      */
+      const timestamp = Date.parse(
+        sgv.timestamp ?? sgv.datetime ?? '',
+      );       
       return {
         type: 'sgv' as const,
         sgv: sgv.sg,
@@ -111,12 +116,20 @@ function sgvEntries(
 
   // Apply trend data to the most recent SGV
   if (sgvs.length > 0 && data.sgs[data.sgs.length - 1].sg !== 0) {
-    const trendData = CARELINK_TREND_TO_NIGHTSCOUT_TREND[data.lastSGTrend];
-    if (trendData) {
-      sgvs[sgvs.length - 1] = { ...sgvs[sgvs.length - 1], ...trendData };
+    console.log('[DEBUG] Cumulus lastSGTrend:', data.lastSGTrend);
+
+    if (data.lastSGTrend !== 'NONE') {
+      const trendData =
+        CARELINK_TREND_TO_NIGHTSCOUT_TREND[data.lastSGTrend];
+
+      if (trendData) {
+        sgvs[sgvs.length - 1] = {
+          ...sgvs[sgvs.length - 1],
+          ...trendData,
+        };
+      }
     }
   }
-
   return sgvs;
 }
 

@@ -10,31 +10,28 @@ dotenv.config({ path: path.join(__dirname, '..', 'my.env') });
 dotenv.config();
 
 import { loadConfig } from './config.js';
-import { CareLinkClient } from './carelink/client.js';
 import { transform } from './transform/index.js';
 import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
 import { login, LOGINDATA_FILE } from './login.js';
-import type { NightscoutSGVEntry, NightscoutDeviceStatus } from './types/nightscout.js';
+import { discoverBaseUrls, CumulusClient } from './carelink/cumulus.js';
+import type {
+  NightscoutSGVEntry,
+  NightscoutDeviceStatus,
+} from './types/nightscout.js';
 
 const config = loadConfig();
 logger.setVerbose(config.verbose);
-
-const client = new CareLinkClient({
-  username: config.username,
-  password: config.password,
-  maxRetryDuration: config.maxRetryDuration,
-  patientId: config.patientId,
-  countryCode: config.countryCode,
-  lang: config.language,
-});
 
 const baseUrl = config.nsBaseUrl || ('https://' + config.nsHost);
 const entriesUrl = baseUrl + '/api/v1/entries.json';
 const devicestatusUrl = baseUrl + '/api/v1/devicestatus.json';
 
-const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(item => item.date);
+const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(
+  item => item.date,
+);
+
 const filterDeviceStatus = makeRecencyFilter<NightscoutDeviceStatus>(
   item => new Date(item.created_at).getTime(),
 );
@@ -43,40 +40,89 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
+async function uploadIfNew(
+  items: unknown[],
+  endpoint: string,
+): Promise<void> {
   if (items.length === 0) {
-    logger.log('No new items for', endpoint);
+    console.log('[Bridge] No new items for', endpoint);
     return;
   }
+
+  console.log(
+    '[Bridge] Uploading',
+    items.length,
+    'item(s) to',
+    endpoint,
+  );
+
   try {
     await upload(items, endpoint, config.nsSecret);
+    console.log('[Bridge] Upload successful:', endpoint);
   } catch (err) {
-    // Continue even if Nightscout can't be reached
+    console.error('[Bridge] Upload failed:', endpoint);
     console.error(err);
   }
 }
 
-async function requestLoop(): Promise<void> {
+async function ensureLogin(): Promise<void> {
+  if (!fs.existsSync(LOGINDATA_FILE)) {
+    console.log(
+      '[Bridge] No logindata.json found — starting login flow...',
+    );
+
+    const isUS =
+      (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
+
+    await login(isUS, config.username, config.password);
+    console.log('');
+  }
+}
+
+async function requestLoop(client: CumulusClient): Promise<void> {
   while (true) {
     try {
-      const data = await client.fetch();
+      const result = await client.fetchRecent(config.patientId);
+      console.log('[Bridge] Cumulus returned');
 
-      if (!data?.lastMedicalDeviceDataUpdateServerTime) {
-        console.log('[Bridge] Warning: received empty or invalid data from CareLink');
-        console.log('[Bridge] Data keys:', Object.keys(data || {}));
-      } else {
-        const transformed = transform(data, config.sgvLimit);
-        const newSgvs = filterSgvs(transformed.entries);
-        const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
+      const data = result.data;
+      console.log(
+        '[Bridge] Data received:',
+        Object.keys(data || {}).length,
+        'keys',
+      );
 
-        logger.log(
-          `Next check in ${Math.round(config.interval / 1000)}s` +
-          ` (at ${new Date(Date.now() + config.interval)})`,
-        );
+      const transformed = transform(data, config.sgvLimit);
 
-        await uploadIfNew(newSgvs, entriesUrl);
-        await uploadIfNew(newDeviceStatuses, devicestatusUrl);
-      }
+      console.log(
+        '[Bridge] Transformed:',
+        transformed.entries.length,
+        'SGVs,',
+        transformed.devicestatus.length,
+        'device statuses',
+      );
+
+      const newSgvs = filterSgvs(transformed.entries);
+      const newDeviceStatuses = filterDeviceStatus(
+        transformed.devicestatus,
+      );
+
+      console.log(
+        '[Bridge] New:',
+        newSgvs.length,
+        'SGVs,',
+        newDeviceStatuses.length,
+        'device statuses',
+      );
+
+      logger.log(
+        `Next check in ${Math.round(config.interval / 1000)}s` +
+        ` (at ${new Date(Date.now() + config.interval)})`,
+      );
+
+      await uploadIfNew(newSgvs, entriesUrl);
+      await uploadIfNew(newDeviceStatuses, devicestatusUrl);
+
     } catch (error) {
       console.error(error);
     }
@@ -85,22 +131,38 @@ async function requestLoop(): Promise<void> {
   }
 }
 
-async function ensureLogin(): Promise<void> {
-  if (!fs.existsSync(LOGINDATA_FILE)) {
-    console.log('[Bridge] No logindata.json found — starting login flow...');
-    const isUS = (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
-    await login(isUS, config.username, config.password);
-    console.log('');
-  }
-}
 
 // Start
 try {
   await ensureLogin();
-  console.log(`[Bridge] Starting — interval set to ${config.interval / 1000}s`);
+
+  const isUS =
+    (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
+
+  const urls = await discoverBaseUrls(isUS);
+
+  const loginData = JSON.parse(
+    fs.readFileSync(LOGINDATA_FILE, 'utf8'),
+  );
+
+  const client = new CumulusClient(
+    loginData,
+    urls,
+  );
+
+  console.log(
+    `[Bridge] Starting — interval set to ${config.interval / 1000}s`,
+  );
+
   console.log('[Bridge] Fetching data now...');
-  await requestLoop();
+
+  await requestLoop(client);
+
 } catch (err) {
-  console.error('[Bridge] Fatal:', (err as Error).message);
+  console.error(
+    '[Bridge] Fatal:',
+    (err as Error).message,
+  );
+
   process.exit(1);
 }
