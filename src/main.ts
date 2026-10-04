@@ -16,10 +16,7 @@ import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
 import { login, LOGINDATA_FILE } from './login.js';
 import { discoverBaseUrls, CumulusClient } from './carelink/cumulus.js';
-import type {
-  NightscoutSGVEntry,
-  NightscoutDeviceStatus,
-} from './types/nightscout.js';
+import type { NightscoutSGVEntry, NightscoutDeviceStatus } from './types/nightscout.js';
 
 const config = loadConfig();
 logger.setVerbose(config.verbose);
@@ -28,9 +25,7 @@ const baseUrl = config.nsBaseUrl || ('https://' + config.nsHost);
 const entriesUrl = baseUrl + '/api/v1/entries.json';
 const devicestatusUrl = baseUrl + '/api/v1/devicestatus.json';
 
-const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(
-  item => item.date,
-);
+const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(item => item.date);
 
 const filterDeviceStatus = makeRecencyFilter<NightscoutDeviceStatus>(
   item => new Date(item.created_at).getTime(),
@@ -40,21 +35,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function uploadIfNew(
-  items: unknown[],
-  endpoint: string,
-): Promise<void> {
+async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
   if (items.length === 0) {
     console.log('[Bridge] No new items for', endpoint);
     return;
   }
 
-  console.log(
-    '[Bridge] Uploading',
-    items.length,
-    'item(s) to',
-    endpoint,
-  );
+  console.log('[Bridge] Uploading',items.length, 'item(s) to', endpoint);
 
   try {
     await upload(items, endpoint, config.nsSecret);
@@ -67,13 +54,8 @@ async function uploadIfNew(
 
 async function ensureLogin(): Promise<void> {
   if (!fs.existsSync(LOGINDATA_FILE)) {
-    console.log(
-      '[Bridge] No logindata.json found — starting login flow...',
-    );
-
-    const isUS =
-      (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
-
+    console.log('[Bridge] No logindata.json found — starting login flow...');
+    const isUS = (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
     await login(isUS, config.username, config.password);
     console.log('');
   }
@@ -103,9 +85,7 @@ async function requestLoop(client: CumulusClient): Promise<void> {
       );
 
       const newSgvs = filterSgvs(transformed.entries);
-      const newDeviceStatuses = filterDeviceStatus(
-        transformed.devicestatus,
-      );
+      const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
 
       console.log(
         '[Bridge] New:',
@@ -124,13 +104,23 @@ async function requestLoop(client: CumulusClient): Promise<void> {
       await uploadIfNew(newDeviceStatuses, devicestatusUrl);
 
     } catch (error) {
-      console.error(error);
-    }
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        (error as { response?: { status?: number } }).response?.status === 401
+      ) {
+        console.error(
+          '[Bridge] CareLink authentication expired (401).',
+        );
+      } else {
+        console.error('[Bridge] Poll failed:', error);
+      }
+  } 
 
     await sleep(config.interval);
   }
 }
-
 
 // Start
 try {
@@ -150,19 +140,11 @@ try {
     urls,
   );
 
-  console.log(
-    `[Bridge] Starting — interval set to ${config.interval / 1000}s`,
-  );
-
+  console.log(`[Bridge] Starting — interval set to ${config.interval / 1000}s`);
   console.log('[Bridge] Fetching data now...');
-
   await requestLoop(client);
-
-} catch (err) {
-  console.error(
-    '[Bridge] Fatal:',
-    (err as Error).message,
-  );
-
+} catch (err)
+  {console.error(
+    '[Bridge] Fatal:', (err as Error).message);
   process.exit(1);
 }
