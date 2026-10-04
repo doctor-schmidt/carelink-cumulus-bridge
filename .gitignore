@@ -12,3 +12,4 @@ https.txt
 cumulus-response*.json
 cumulus-hit.json
 server.log
+.DS_Store
