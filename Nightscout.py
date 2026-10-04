@@ -3,12 +3,10 @@
 import requests
 from datetime import datetime
 
-
 nightscout = "https://freestyle.fly.dev"
 
 now = datetime.now().astimezone()
 today = now.date()
-
 
 def getIOB(bolus, minAgo):
     dia = 5
@@ -31,51 +29,36 @@ def getIOB(bolus, minAgo):
 
     return 0.0
 
-
 # Get treatments from Nightscout
 response = requests.get(
     nightscout + "/api/v1/treatments",
     timeout=10
 )
-
 response.raise_for_status()
-
 treatments = response.json()
-
 
 # Today's boluses
 injections = []
 
 for treatment in treatments:
-
     if treatment.get("eventType") != "Bolus":
         continue
-
     insulin = treatment.get("insulin")
     timestamp = treatment.get("created_at")
-
     if insulin is None or not timestamp:
         continue
-
     dt = datetime.fromisoformat(
         timestamp.replace("Z", "+00:00")
     ).astimezone()
-
     if dt.date() != today:
         continue
-
     injections.append({
         "time": dt,
         "units": float(insulin),
     })
 
-
 # Newest first
-injections.sort(
-    key=lambda x: x["time"],
-    reverse=True
-)
-
+injections.sort(key=lambda x: x["time"])
 
 # Total insulin
 total = sum(
@@ -83,44 +66,34 @@ total = sum(
     for injection in injections
 )
 
-
 # IOB
 total_iob = 0.0
-
 for injection in injections:
-
     min_ago = (
         now - injection["time"]
     ).total_seconds() / 60
-
     total_iob += getIOB(
         injection["units"],
         min_ago
     )
 
-
-print(
-    f"\n   {total:g}u   "
-    f"{len(injections)}   "
-    f"IOB {total_iob:.2f}u\n"
-)
-
-
-# Individual injections
-for injection in injections:
-
+print()
+for number, injection in enumerate(injections, start=1):
     minutes = int(
         (now - injection["time"])
         .total_seconds() // 60
     )
-
     hours = minutes // 60
     mins = minutes % 60
-
     print(
-        f"{injection['time']:%H:%M}   "
-        f"{injection['units']:g}u   "
-        f"{hours}{mins:02d}"
+        f"{number}  "
+        f"{injection['time']:%H:%M}      "
+        f"{injection['units']:g}u    "
+        f"{hours} {mins:02d}"
     )
-
+print(
+    f"\n    {now:%H:%M}    "
+    f"{total:g}u      "
+    f"IOB {total_iob:.2f}u"
+)
 print()
