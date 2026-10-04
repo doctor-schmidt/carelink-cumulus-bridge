@@ -92,8 +92,8 @@ for number, injection in enumerate(injections, start=1):
         f"{hours} {mins:02d}"
     )
 print(
-    f"\n    {now:%H:%M}    "
-    f"{total:g}u      "
+    f"\n   {now:%H:%M}     "
+    f"{total:g}u        "
     f"IOB {total_iob:.2f}u"
 )
 print()
