@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import axios from 'axios';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,10 +61,7 @@ async function ensureLogin(): Promise<void> {
   }
 }
 
-async function requestLoop(
-  client: CumulusClient,
-  urls: Awaited<ReturnType<typeof discoverBaseUrls>>,
-): Promise<void> {
+async function requestLoop(client: CumulusClient): Promise<void> {
   while (true) {
     try {
       const result = await client.fetchRecent(config.patientId);
@@ -108,36 +104,19 @@ async function requestLoop(
       await uploadIfNew(newDeviceStatuses, devicestatusUrl);
 
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 401) {
-        console.log('[Bridge] CareLink authentication expired — re-authenticating...');
-
-        try {
-          const isUS =
-            (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
-
-          const newLoginData = await login(
-            isUS,
-            config.username,
-            config.password,
-          );
-
-          client = new CumulusClient(newLoginData, urls);
-
-          console.log('[Bridge] Authentication refreshed.');
-        } catch (loginError) {
-          console.error(
-            '[Bridge] Re-authentication failed:',
-            loginError instanceof Error ? loginError.message : loginError,
-          );
-        }
-      } else if (axios.isAxiosError(error)) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        (error as { response?: { status?: number } }).response?.status === 401
+      ) {
         console.error(
-          `[Bridge] Poll failed: HTTP ${error.response?.status ?? 'unknown'}`,
+          '[Bridge] CareLink authentication expired (401).',
         );
       } else {
-        console.error(error);
+        console.error('[Bridge] Poll failed:', error);
       }
-    }
+  } 
 
     await sleep(config.interval);
   }
@@ -163,11 +142,9 @@ try {
 
   console.log(`[Bridge] Starting — interval set to ${config.interval / 1000}s`);
   console.log('[Bridge] Fetching data now...');
-  await requestLoop(client, urls);
-} catch (err) {
-  console.error(
-    '[Bridge] Fatal:',
-    (err as Error).message,
-  );
+  await requestLoop(client);
+} catch (err)
+  {console.error(
+    '[Bridge] Fatal:', (err as Error).message);
   process.exit(1);
 }
