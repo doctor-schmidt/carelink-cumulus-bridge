@@ -58,7 +58,7 @@ for treatment in treatments:
     })
 
 # Newest first
-injections.sort(key=lambda x: x["time"])
+injections.sort(key=lambda x: x["time"], reverse=True)
 
 # Total insulin
 total = sum(
@@ -77,7 +77,11 @@ for injection in injections:
         min_ago
     )
 
-print()
+print(
+    f"\n   {now:%_H:%M}     "
+    f"{total:g}u        "
+    f"IOB {total_iob:.2f}u\n"
+)
 for number, injection in enumerate(injections, start=1):
     minutes = int(
         (now - injection["time"])
@@ -87,13 +91,9 @@ for number, injection in enumerate(injections, start=1):
     mins = minutes % 60
     print(
         f"{number}  "
-        f"{injection['time']:%H:%M}      "
+        f"{injection['time']:%_H:%M}      "
         f"{injection['units']:g}u    "
         f"{hours} {mins:02d}"
     )
-print(
-    f"\n   {now:%H:%M}     "
-    f"{total:g}u        "
-    f"IOB {total_iob:.2f}u"
-)
+
 print()
