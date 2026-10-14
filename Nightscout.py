@@ -12,13 +12,11 @@ def getIOB(bolus, minAgo):
     dia = 5
     scaleFactor = 3.0 / dia
     minAgo = scaleFactor * minAgo
-
     if minAgo < 75:
         x1 = minAgo / 5 + 1
         return bolus * (
             1 - 0.001852 * x1 * x1 + 0.001852 * x1
         )
-
     if minAgo < 180:
         x2 = (minAgo - 75) / 5
         return bolus * (
@@ -26,7 +24,6 @@ def getIOB(bolus, minAgo):
             - 0.054233 * x2
             + 0.55556
         )
-
     return 0.0
 
 # Get treatments from Nightscout
@@ -41,7 +38,8 @@ treatments = response.json()
 injections = []
 
 for treatment in treatments:
-    if treatment.get("eventType") != "Bolus":
+    eventType =  treatment.get("eventType")
+    if "Bolus" not in eventType:
         continue
     insulin = treatment.get("insulin")
     timestamp = treatment.get("created_at")
@@ -58,7 +56,7 @@ for treatment in treatments:
     })
 
 # Newest first
-injections.sort(key=lambda x: x["time"], reverse=True)
+injections.sort(key=lambda x: x["time"])
 
 # Total insulin
 total = sum(
@@ -78,10 +76,11 @@ for injection in injections:
     )
 
 print(
-    f"\n   {now:%_H:%M}     "
+    f"\n   {now:%H:%M}     "
     f"{total:g}u        "
-    f"IOB {total_iob:.2f}u\n"
+    f"IOB {total_iob:.2f}u"
 )
+print()
 for number, injection in enumerate(injections, start=1):
     minutes = int(
         (now - injection["time"])
@@ -91,9 +90,8 @@ for number, injection in enumerate(injections, start=1):
     mins = minutes % 60
     print(
         f"{number}  "
-        f"{injection['time']:%_H:%M}      "
+        f"{injection['time']:%H:%M}      "
         f"{injection['units']:g}u    "
         f"{hours} {mins:02d}"
     )
-
 print()
